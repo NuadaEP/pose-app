@@ -1,118 +1,381 @@
-import Image from 'next/image'
-import { Inter } from 'next/font/google'
+import {
+  RefObject,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { Inter } from "next/font/google";
 
-const inter = Inter({ subsets: ['latin'] })
+import Webcam from "react-webcam";
+
+import * as poseDetection from "@tensorflow-models/pose-detection";
+import * as tf from "@tensorflow/tfjs-core";
+import "@tensorflow/tfjs-backend-webgl";
+
+const inter = Inter({ subsets: ["latin"] });
+
+type KeypointName =
+  | "nose"
+  | "left_eye"
+  | "right_eye"
+  | "left_ear"
+  | "right_ear"
+  | "left_shoulder"
+  | "right_shoulder"
+  | "left_elbow"
+  | "right_elbow"
+  | "left_wrist"
+  | "right_wrist"
+  | "left_hip"
+  | "right_hip"
+  | "left_knee"
+  | "right_knee"
+  | "left_ankle"
+  | "right_ankle";
+
+type Keypoint = {
+  y: number;
+  x: number;
+  score: number;
+  name: KeypointName;
+};
+
+type StandUp = {
+  rightSide: {
+    min: number;
+    max: number;
+  };
+  leftSide: {
+    min: number;
+    max: number;
+  };
+};
 
 export default function Home() {
+  const cameraReference = useRef<Webcam>(null);
+  const poseReference = useRef<HTMLVideoElement>(null);
+
+  const [isCapturing, setIsCapturing] = useState(false);
+  const [recordedChunks, setRecordedChunks] = useState<Blob[]>([]);
+  const [pose, setPose] = useState<string>("Not Detected");
+
+  const [rep, setRep] = useState(0);
+
+  const [standUp, setStandUp] = useState<StandUp>({
+    leftSide: {
+      max: 0,
+      min: 0,
+    },
+    rightSide: {
+      max: 0,
+      min: 0,
+    },
+  });
+
+  const comparePositionsWithAccuracy = useCallback(
+    (right: number, left: number, accuracy: number): boolean => {
+      const rightMax = right * accuracy + right;
+      const rightMin = right * accuracy - right;
+
+      const leftMax = left * accuracy + left;
+      const leftMin = left * accuracy - left;
+
+      const isLeftAcceptable = left <= rightMax && left >= rightMin;
+      const isRightAcceptable = right <= leftMax && right >= leftMin;
+
+      return isLeftAcceptable && isRightAcceptable;
+    },
+    []
+  );
+
+  const estimatePoses = useCallback(async (ref: RefObject<any>) => {
+    await tf.ready();
+
+    const detector = await poseDetection.createDetector(
+      poseDetection.SupportedModels.MoveNet,
+      {
+        modelType: poseDetection.movenet.modelType.SINGLEPOSE_LIGHTNING,
+        enableTracking: true,
+      }
+    );
+
+    const poses = await detector.estimatePoses(ref);
+
+    if (poses.length === 0) return undefined;
+
+    return poses[0].keypoints.map(
+      (pose): Keypoint => ({
+        name: pose.name as KeypointName,
+        score: pose.score as number,
+        x: pose.x,
+        y: pose.y,
+      })
+    );
+  }, []);
+
+  const isLowerLimbsAligned = useCallback(
+    (moviment: Keypoint[]) => {
+      const [rightAnkle, leftAnkle, rightKnee, leftKnee, rightHip, leftHip] = [
+        moviment.find(({ name }) => name === "right_ankle")?.y as number,
+        moviment.find(({ name }) => name === "left_ankle")?.y as number,
+        moviment.find(({ name }) => name === "right_knee")?.y as number,
+        moviment.find(({ name }) => name === "right_knee")?.y as number,
+        moviment.find(({ name }) => name === "right_hip")?.y as number,
+        moviment.find(({ name }) => name === "left_hip")?.y as number,
+      ];
+
+      const isAnkleAcceptable = comparePositionsWithAccuracy(
+        rightAnkle,
+        leftAnkle,
+        0.2
+      );
+
+      const isKneeAcceptable = comparePositionsWithAccuracy(
+        rightKnee,
+        leftKnee,
+        0.3
+      );
+
+      const isHipAcceptable = comparePositionsWithAccuracy(
+        rightHip,
+        leftHip,
+        0.3
+      );
+
+      return isAnkleAcceptable && isKneeAcceptable && isHipAcceptable;
+    },
+    [comparePositionsWithAccuracy]
+  );
+
+  useEffect(() => {
+    setTimeout(async () => {
+      const standUpAvarege: { right: number[]; left: number[] } = {
+        right: [],
+        left: [],
+      };
+
+      for (let index = 0; index <= 2; index++) {
+        const moviment = await estimatePoses(poseReference.current);
+
+        if (moviment) {
+          const lowerLimbs = isLowerLimbsAligned(moviment);
+
+          if (lowerLimbs) {
+            const [rightAnkle, leftAnkle, rightHip, leftHip] = [
+              moviment.find(({ name }) => name === "right_ankle")?.y as number,
+              moviment.find(({ name }) => name === "left_ankle")?.y as number,
+              moviment.find(({ name }) => name === "right_hip")?.y as number,
+              moviment.find(({ name }) => name === "left_hip")?.y as number,
+            ];
+
+            if (index < 2) {
+              const isRightStandUp = rightAnkle - rightHip;
+              const isLefttStandUp = leftAnkle - leftHip;
+
+              standUpAvarege.right.push(isRightStandUp);
+              standUpAvarege.left.push(isLefttStandUp);
+            } else {
+              const sumRight = standUpAvarege.right.reduce(
+                (prev, current) => current + prev,
+                0
+              );
+
+              const sumLeft = standUpAvarege.left.reduce(
+                (prev, current) => current + prev,
+                0
+              );
+
+              const rightAvarege = sumRight / standUpAvarege.right.length;
+              const leftAvarege = sumLeft / standUpAvarege.left.length;
+              setStandUp({
+                leftSide: {
+                  max: leftAvarege + leftAvarege * 0.1,
+                  min: leftAvarege - leftAvarege * 0.1,
+                },
+                rightSide: {
+                  max: rightAvarege + rightAvarege * 0.1,
+                  min: rightAvarege - rightAvarege * 0.1,
+                },
+              });
+
+              setPose("DETECTED!");
+            }
+          }
+        }
+      }
+    }, 2000);
+  }, [estimatePoses, isLowerLimbsAligned]);
+
+  const isStadUp = useCallback(
+    async (ref: RefObject<any>) => {
+      const moviment = await estimatePoses(ref);
+
+      if (!moviment) return false;
+
+      const lowerLimbs = isLowerLimbsAligned(moviment);
+
+      if (lowerLimbs) {
+        const [rightAnkle, leftAnkle, rightHip, leftHip] = [
+          moviment.find(({ name }) => name === "right_ankle")?.y as number,
+          moviment.find(({ name }) => name === "left_ankle")?.y as number,
+          moviment.find(({ name }) => name === "right_hip")?.y as number,
+          moviment.find(({ name }) => name === "left_hip")?.y as number,
+        ];
+
+        const isRightStandUp = rightAnkle - rightHip;
+        const isLefttStandUp = leftAnkle - leftHip;
+
+        const isStandup =
+          isRightStandUp >= standUp.rightSide.min &&
+          isRightStandUp <= standUp.rightSide.max &&
+          isLefttStandUp >= standUp.leftSide.min &&
+          isLefttStandUp <= standUp.leftSide.max;
+
+        return isStandup;
+      }
+
+      return false;
+    },
+    [estimatePoses, isLowerLimbsAligned, standUp]
+  );
+
+  const isSquat = useCallback(
+    async (ref: RefObject<any>) => {
+      const moviment = await estimatePoses(ref);
+
+      if (!moviment) return false;
+
+      const [rightKnee, leftKnee, rightHip, leftHip] = [
+        moviment.find(({ name }) => name === "right_knee")?.y as number,
+        moviment.find(({ name }) => name === "right_knee")?.y as number,
+        moviment.find(({ name }) => name === "right_hip")?.y as number,
+        moviment.find(({ name }) => name === "left_hip")?.y as number,
+      ];
+
+      const lowerLimbs = isLowerLimbsAligned(moviment);
+
+      if (lowerLimbs) {
+        const accuracy = 0.1;
+
+        const isRightBreakParallel =
+          rightHip >= rightKnee - rightKnee * accuracy;
+        const isLeftBreakParallel = leftHip >= leftKnee - leftKnee * accuracy;
+
+        const isBreakParallel = isRightBreakParallel && isLeftBreakParallel;
+
+        return isBreakParallel;
+      }
+
+      return false;
+    },
+    [estimatePoses, isLowerLimbsAligned]
+  );
+
+  const startRecord = useCallback(async () => {
+    setIsCapturing(true);
+
+    await tf.ready();
+
+    // const completMoviment: Record = {
+    //   "airsquat": false,
+    //   "standup": false,
+    // };
+
+    const commandList = { airsquat: false, standup: false };
+
+    setInterval(async () => {
+      if (commandList.airsquat && commandList.standup) {
+        commandList.airsquat = false;
+        commandList.standup = false;
+
+        setRep((prev) => (prev += 1));
+      }
+
+      if (!commandList.airsquat) {
+        const squat = await isSquat(poseReference.current);
+
+        if (squat) {
+          setPose("Squat");
+
+          commandList.airsquat = true;
+        }
+      }
+
+      if (commandList.airsquat && !commandList.standup) {
+        const standup = await isStadUp(poseReference.current);
+
+        if (standup) {
+          setPose("Stand up");
+
+          commandList.standup = true;
+        }
+      }
+    }, 100);
+  }, [isSquat, isStadUp]);
+
+  const stopRecord = useCallback(() => {
+    setIsCapturing(false);
+  }, []);
+
+  const handleDownload = useCallback(() => {
+    if (recordedChunks.length) {
+      const blob = new Blob(recordedChunks, {
+        type: "video/webm",
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      document.body.appendChild(a);
+      // a.style = "display: none";
+      a.href = url;
+      a.download = "react-webcam-stream-capture.webm";
+      a.click();
+      window.URL.revokeObjectURL(url);
+      setRecordedChunks([]);
+    }
+  }, [recordedChunks]);
+
+  const videoConstraints = {
+    width: 420,
+    height: 420,
+    facingMode: "user",
+  };
+
   return (
     <main
       className={`flex min-h-screen flex-col items-center justify-between p-24 ${inter.className}`}
     >
-      <div className="z-10 w-full max-w-5xl items-center justify-between font-mono text-sm lg:flex">
-        <p className="fixed left-0 top-0 flex w-full justify-center border-b border-gray-300 bg-gradient-to-b from-zinc-200 pb-6 pt-8 backdrop-blur-2xl dark:border-neutral-800 dark:bg-zinc-800/30 dark:from-inherit lg:static lg:w-auto  lg:rounded-xl lg:border lg:bg-gray-200 lg:p-4 lg:dark:bg-zinc-800/30">
-          Get started by editing&nbsp;
-          <code className="font-mono font-bold">src/pages/index.tsx</code>
-        </p>
-        <div className="fixed bottom-0 left-0 flex h-48 w-full items-end justify-center bg-gradient-to-t from-white via-white dark:from-black dark:via-black lg:static lg:h-auto lg:w-auto lg:bg-none">
-          <a
-            className="pointer-events-none flex place-items-center gap-2 p-8 lg:pointer-events-auto lg:p-0"
-            href="https://vercel.com?utm_source=create-next-app&utm_medium=default-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            By{' '}
-            <Image
-              src="/vercel.svg"
-              alt="Vercel Logo"
-              className="dark:invert"
-              width={100}
-              height={24}
-              priority
-            />
-          </a>
-        </div>
-      </div>
+      <video
+        width={320}
+        height={240}
+        controls
+        autoPlay
+        ref={poseReference}
+        // onTimeUpdate={startRecord}
+      >
+        <source src="air-squat.mp4" type="video/mp4" />
+      </video>
 
-      <div className="relative flex place-items-center before:absolute before:h-[300px] before:w-[480px] before:-translate-x-1/2 before:rounded-full before:bg-gradient-radial before:from-white before:to-transparent before:blur-2xl before:content-[''] after:absolute after:-z-20 after:h-[180px] after:w-[240px] after:translate-x-1/3 after:bg-gradient-conic after:from-sky-200 after:via-blue-200 after:blur-2xl after:content-[''] before:dark:bg-gradient-to-br before:dark:from-transparent before:dark:to-blue-700/10 after:dark:from-sky-900 after:dark:via-[#0141ff]/40 before:lg:h-[360px]">
-        <Image
-          className="relative dark:drop-shadow-[0_0_0.3rem_#ffffff70] dark:invert"
-          src="/next.svg"
-          alt="Next.js Logo"
-          width={180}
-          height={37}
-          priority
-        />
-      </div>
-
-      <div className="mb-32 grid text-center lg:mb-0 lg:grid-cols-4 lg:text-left">
-        <a
-          href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=default-template-tw&utm_campaign=create-next-app"
-          className="group rounded-lg border border-transparent px-5 py-4 transition-colors hover:border-gray-300 hover:bg-gray-100 hover:dark:border-neutral-700 hover:dark:bg-neutral-800/30"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <h2 className={`mb-3 text-2xl font-semibold`}>
-            Docs{' '}
-            <span className="inline-block transition-transform group-hover:translate-x-1 motion-reduce:transform-none">
-              -&gt;
-            </span>
-          </h2>
-          <p className={`m-0 max-w-[30ch] text-sm opacity-50`}>
-            Find in-depth information about Next.js features and API.
-          </p>
-        </a>
-
-        <a
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=default-template-tw&utm_campaign=create-next-app"
-          className="group rounded-lg border border-transparent px-5 py-4 transition-colors hover:border-gray-300 hover:bg-gray-100 hover:dark:border-neutral-700 hover:dark:bg-neutral-800/30"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <h2 className={`mb-3 text-2xl font-semibold`}>
-            Learn{' '}
-            <span className="inline-block transition-transform group-hover:translate-x-1 motion-reduce:transform-none">
-              -&gt;
-            </span>
-          </h2>
-          <p className={`m-0 max-w-[30ch] text-sm opacity-50`}>
-            Learn about Next.js in an interactive course with&nbsp;quizzes!
-          </p>
-        </a>
-
-        <a
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=default-template-tw&utm_campaign=create-next-app"
-          className="group rounded-lg border border-transparent px-5 py-4 transition-colors hover:border-gray-300 hover:bg-gray-100 hover:dark:border-neutral-700 hover:dark:bg-neutral-800/30"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <h2 className={`mb-3 text-2xl font-semibold`}>
-            Templates{' '}
-            <span className="inline-block transition-transform group-hover:translate-x-1 motion-reduce:transform-none">
-              -&gt;
-            </span>
-          </h2>
-          <p className={`m-0 max-w-[30ch] text-sm opacity-50`}>
-            Discover and deploy boilerplate example Next.js&nbsp;projects.
-          </p>
-        </a>
-
-        <a
-          href="https://vercel.com/new?utm_source=create-next-app&utm_medium=default-template-tw&utm_campaign=create-next-app"
-          className="group rounded-lg border border-transparent px-5 py-4 transition-colors hover:border-gray-300 hover:bg-gray-100 hover:dark:border-neutral-700 hover:dark:bg-neutral-800/30"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <h2 className={`mb-3 text-2xl font-semibold`}>
-            Deploy{' '}
-            <span className="inline-block transition-transform group-hover:translate-x-1 motion-reduce:transform-none">
-              -&gt;
-            </span>
-          </h2>
-          <p className={`m-0 max-w-[30ch] text-sm opacity-50`}>
-            Instantly deploy your Next.js site to a shareable URL with Vercel.
-          </p>
-        </a>
-      </div>
+      <h1 style={{ color: "green" }}>
+        {pose} AND {rep}
+      </h1>
+      {/* <Webcam
+        ref={cameraReference}
+        height={400}
+        width={600}
+        videoConstraints={videoConstraints}
+      /> */}
+      {isCapturing ? (
+        <button onClick={stopRecord}>Stop Capture</button>
+      ) : (
+        <button onClick={startRecord} disabled={pose !== "DETECTED!"}>
+          {pose === "DETECTED!" ? "Start Capture" : ""}
+        </button>
+      )}
+      {recordedChunks.length > 0 && (
+        <button onClick={handleDownload}>Download</button>
+      )}
     </main>
-  )
+  );
 }

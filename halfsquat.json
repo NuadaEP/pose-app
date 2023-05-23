@@ -1,0 +1,55 @@
+[
+  {
+    "keypoints": [
+      {
+        "score": 0.8857601284980774,
+        "name": "left_shoulder"
+      },
+      {
+        "score": 0.758556067943573,
+        "name": "right_shoulder"
+      },
+      {
+        "score": 0.6029376983642578,
+        "name": "left_elbow"
+      },
+      {
+        "score": 0.7076706290245056,
+        "name": "right_elbow"
+      },
+      {
+        "score": 0.2206634134054184,
+        "name": "left_wrist"
+      },
+      {
+        "score": 0.39435458183288574,
+        "name": "right_wrist"
+      },
+      {
+        "score": 0.8619867563247681,
+        "name": "left_hip"
+      },
+      {
+        "score": 0.8305225372314453,
+        "name": "right_hip"
+      },
+      {
+        "score": 0.7888630032539368,
+        "name": "left_knee"
+      },
+      {
+        "score": 0.6910960674285889,
+        "name": "right_knee"
+      },
+      {
+        "score": 0.05495069548487663,
+        "name": "left_ankle"
+      },
+      {
+        "score": 0.2021561712026596,
+        "name": "right_ankle"
+      }
+    ],
+    "score": 0.63289974629879
+  }
+]
