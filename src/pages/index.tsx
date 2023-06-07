@@ -60,6 +60,9 @@ export default function Home() {
   const [isCapturing, setIsCapturing] = useState(false);
   const [recordedChunks, setRecordedChunks] = useState<Blob[]>([]);
   const [pose, setPose] = useState<string>("Not Detected");
+  // const [commandList, setCommandList] = useState<Array<"airsquat" | "standup">>(
+  //   []
+  // );
 
   const [rep, setRep] = useState(0);
 
@@ -272,6 +275,14 @@ export default function Home() {
     },
     [estimatePoses, isLowerLimbsAligned]
   );
+  let commandList: Array<"airsquat" | "standup"> = [];
+
+  const validateRep = useCallback(() => {
+    if (commandList.toString() === ["airsquat", "standup"].toString()) {
+      // console.log(commandList);
+      setRep((prev) => (prev += 1));
+    }
+  }, [commandList]);
 
   const startRecord = useCallback(async () => {
     setIsCapturing(true);
@@ -283,36 +294,41 @@ export default function Home() {
     //   "standup": false,
     // };
 
-    const commandList = { airsquat: false, standup: false };
+    // const commandList = { airsquat: false, standup: false };
+    // let commandList: Array<"airsquat" | "standup"> = [];
 
-    setInterval(async () => {
-      if (commandList.airsquat && commandList.standup) {
-        commandList.airsquat = false;
-        commandList.standup = false;
+    // async () => {
+    console.log(commandList.length, commandList);
+    if (commandList.toString() === ["airsquat", "standup"].toString()) {
+      commandList = [];
+      setRep((prev) => (prev += 1));
+    }
 
-        setRep((prev) => (prev += 1));
+    if (commandList[0] === "standup") commandList = [];
+
+    if (commandList.length === 0) {
+      const squat = await isSquat(poseReference.current);
+
+      if (squat && !commandList.includes("airsquat")) {
+        setPose("Squat");
+        commandList.push("airsquat");
+        // commandList.push("airsquat");
       }
+    } else if (
+      commandList.length !== 0 &&
+      commandList.toString() === ["airsquat"].toString()
+    ) {
+      const standup = await isStadUp(poseReference.current);
 
-      if (!commandList.airsquat) {
-        const squat = await isSquat(poseReference.current);
+      if (standup && !commandList.includes("standup")) {
+        setPose("Stand up");
+        commandList.push("standup");
 
-        if (squat) {
-          setPose("Squat");
-
-          commandList.airsquat = true;
-        }
+        // validateRep();
       }
+    }
 
-      if (commandList.airsquat && !commandList.standup) {
-        const standup = await isStadUp(poseReference.current);
-
-        if (standup) {
-          setPose("Stand up");
-
-          commandList.standup = true;
-        }
-      }
-    }, 100);
+    // };
   }, [isSquat, isStadUp]);
 
   const stopRecord = useCallback(() => {
@@ -352,6 +368,8 @@ export default function Home() {
         controls
         autoPlay
         ref={poseReference}
+        onTimeUpdate={startRecord}
+
         // onTimeUpdate={startRecord}
       >
         <source src="air-squat.mp4" type="video/mp4" />
