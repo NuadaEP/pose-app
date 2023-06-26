@@ -1,11 +1,4 @@
-import {
-  RefObject,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { RefObject, useCallback, useEffect, useRef, useState } from "react";
 import { Inter } from "next/font/google";
 
 import Webcam from "react-webcam";
@@ -55,14 +48,9 @@ type StandUp = {
 
 export default function Home() {
   const cameraReference = useRef<Webcam>(null);
-  const poseReference = useRef<HTMLVideoElement>(null);
 
   const [isCapturing, setIsCapturing] = useState(false);
-  const [recordedChunks, setRecordedChunks] = useState<Blob[]>([]);
   const [pose, setPose] = useState<string>("Not Detected");
-  // const [commandList, setCommandList] = useState<Array<"airsquat" | "standup">>(
-  //   []
-  // );
 
   const [rep, setRep] = useState(0);
 
@@ -160,7 +148,7 @@ export default function Home() {
       };
 
       for (let index = 0; index <= 2; index++) {
-        const moviment = await estimatePoses(poseReference.current);
+        const moviment = await estimatePoses(cameraReference.current?.video);
 
         if (moviment) {
           const lowerLimbs = isLowerLimbsAligned(moviment);
@@ -275,82 +263,46 @@ export default function Home() {
     },
     [estimatePoses, isLowerLimbsAligned]
   );
+
   let commandList: Array<"airsquat" | "standup"> = [];
 
-  const validateRep = useCallback(() => {
-    if (commandList.toString() === ["airsquat", "standup"].toString()) {
-      // console.log(commandList);
-      setRep((prev) => (prev += 1));
-    }
-  }, [commandList]);
+  const startRecord = useCallback(() => {
+    setInterval(async () => {
+      setIsCapturing(true);
 
-  const startRecord = useCallback(async () => {
-    setIsCapturing(true);
+      await tf.ready();
 
-    await tf.ready();
-
-    // const completMoviment: Record = {
-    //   "airsquat": false,
-    //   "standup": false,
-    // };
-
-    // const commandList = { airsquat: false, standup: false };
-    // let commandList: Array<"airsquat" | "standup"> = [];
-
-    // async () => {
-    console.log(commandList.length, commandList);
-    if (commandList.toString() === ["airsquat", "standup"].toString()) {
-      commandList = [];
-      setRep((prev) => (prev += 1));
-    }
-
-    if (commandList[0] === "standup") commandList = [];
-
-    if (commandList.length === 0) {
-      const squat = await isSquat(poseReference.current);
-
-      if (squat && !commandList.includes("airsquat")) {
-        setPose("Squat");
-        commandList.push("airsquat");
-        // commandList.push("airsquat");
+      if (commandList.toString() === ["airsquat", "standup"].toString()) {
+        commandList = [];
+        setRep((prev) => (prev += 1));
       }
-    } else if (
-      commandList.length !== 0 &&
-      commandList.toString() === ["airsquat"].toString()
-    ) {
-      const standup = await isStadUp(poseReference.current);
 
-      if (standup && !commandList.includes("standup")) {
-        setPose("Stand up");
-        commandList.push("standup");
+      if (commandList[0] === "standup") commandList = [];
 
-        // validateRep();
+      if (commandList.length === 0) {
+        const squat = await isSquat(cameraReference.current?.video);
+
+        if (squat && !commandList.includes("airsquat")) {
+          setPose("Squat");
+          commandList.push("airsquat");
+        }
+      } else if (
+        commandList.length !== 0 &&
+        commandList.toString() === ["airsquat"].toString()
+      ) {
+        const standup = await isStadUp(cameraReference.current?.video);
+
+        if (standup && !commandList.includes("standup")) {
+          setPose("Stand up");
+          commandList.push("standup");
+        }
       }
-    }
-
-    // };
+    }, 200);
   }, [isSquat, isStadUp]);
 
   const stopRecord = useCallback(() => {
     setIsCapturing(false);
   }, []);
-
-  const handleDownload = useCallback(() => {
-    if (recordedChunks.length) {
-      const blob = new Blob(recordedChunks, {
-        type: "video/webm",
-      });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      document.body.appendChild(a);
-      // a.style = "display: none";
-      a.href = url;
-      a.download = "react-webcam-stream-capture.webm";
-      a.click();
-      window.URL.revokeObjectURL(url);
-      setRecordedChunks([]);
-    }
-  }, [recordedChunks]);
 
   const videoConstraints = {
     width: 420,
@@ -362,37 +314,23 @@ export default function Home() {
     <main
       className={`flex min-h-screen flex-col items-center justify-between p-24 ${inter.className}`}
     >
-      <video
-        width={320}
-        height={240}
-        controls
-        autoPlay
-        ref={poseReference}
-        onTimeUpdate={startRecord}
-
-        // onTimeUpdate={startRecord}
-      >
-        <source src="air-squat.mp4" type="video/mp4" />
-      </video>
-
       <h1 style={{ color: "green" }}>
         {pose} AND {rep}
       </h1>
-      {/* <Webcam
+
+      <Webcam
         ref={cameraReference}
         height={400}
         width={600}
         videoConstraints={videoConstraints}
-      /> */}
+      />
+
       {isCapturing ? (
         <button onClick={stopRecord}>Stop Capture</button>
       ) : (
         <button onClick={startRecord} disabled={pose !== "DETECTED!"}>
           {pose === "DETECTED!" ? "Start Capture" : ""}
         </button>
-      )}
-      {recordedChunks.length > 0 && (
-        <button onClick={handleDownload}>Download</button>
       )}
     </main>
   );
